@@ -20,6 +20,7 @@ try:
 	def prompt():
 		if args.prompt and sys.stdin.isatty():
 			sys.stderr.write( '\033[37;1msql>\033[0m ' )
+			sys.stderr.flush()
 
 	def print_command( command, args = [] ):
 		if sys.stderr.isatty():
@@ -71,14 +72,14 @@ try:
 				# Read headers if necessary
 				if len( headers ) == 1 and headers[0] == '*':
 					try:
-						headers = reader.next()
+						headers = next( reader.next )
 					except StopIteration:
 						die( "Headers not found in file %s" % f )
 
 				# Determine the maximum row length
 				n = max( [len( row ) for row in reader] )
 				if len( headers ) < n:
-					headers = headers + ["V" + str( i ) for i in xrange( len( headers ) + 1, n + 1 )]
+					headers = headers + ["V" + str( i ) for i in range( len( headers ) + 1, n + 1 )]
 
 				# Create the table
 				table = "file" + str( index + 1 )
@@ -94,10 +95,10 @@ try:
 				
 					f1.seek( beginning )
 					reader = iter( csv.reader( f1, delimiter = args.delimiter ) )
-					reader.next()
+					next( reader )
 					for row in reader:
 						if len( row ) < len( headers ):
-							row = row + [None for _ in xrange( len( row ), len( headers ) )]
+							row = row + [None for _ in range( len( row ), len( headers ) )]
 						cursor.execute( 'INSERT INTO "' + table + '" (' + fields + ') VALUES (' + fields_qs + ')', row )
 						if args.show_commands:
 							print_command( 'INSERT INTO "' + table + '" (' + fields + ') VALUES (' + fields_qs + ')', row )
@@ -114,7 +115,7 @@ try:
 			else:
 				iterator = (x + '\n' for x in args.command)
 				args.prompt = False
-				get_command = iterator.next
+				get_command = lambda: next( iterator )
 
 			previous = ''
 			prompt()
@@ -125,6 +126,7 @@ try:
 					previous = line[:-1]
 					if sys.stdin.isatty():
 						sys.stderr.write( '\033[37m...\033[0m  ' )
+						sys.stderr.flush()
 					continue
 				elif line == 'exit' or line == 'quit':
 					sys.exit( 1 )
@@ -133,12 +135,12 @@ try:
 					if table not in all_headers:
 						error( 'Error', 'Table "%s" not in headers index.' % table )
 					else:
-						print args.ofs.join( all_headers[table] )
+						print( args.ofs.join( all_headers[table] ) )
 				else:
 					try:
 						cursor.execute( line )
 						for row in cursor:
-							print args.ofs.join( row )
+							print( args.ofs.join( row ) )
 					except sqlite3.OperationalError as ex:
 						error( 'SQL Error', ' '.join( ex.args ) )
 				prompt()

@@ -1,0 +1,153 @@
+#!/usr/bin/env python
+
+from argparse import ArgumentParser
+from contextlib import closing
+import csv
+import sqlite3
+import sys
+
+try:
+	parser = ArgumentParser( description = 'Run SQLite commands on TSV files' )
+	parser.add_argument( 'file', metavar = 'file', type = str, nargs = '+', help = 'the files to use' )
+	parser.add_argument( '-q', '--no-prompt', dest = 'prompt', action = 'store_const', const = False, default = True, help = 'Suppress the prompt' )
+	parser.add_argument( '-d', '--delimiter', type = str, default = '\t' )
+	parser.add_argument( '--show-commands', dest = 'show_commands', action = 'store_const', const = True, default = False, help = 'Show SQL commands executed' )
+	parser.add_argument( '--ofs', default = '\t', help = 'Output file separator')
+	parser.add_argument( '-c', '--command', action = 'append', default = [], help = 'A SQL command to run. This option can be specified multiple times.')
+
+	args = parser.parse_args()
+
+	def prompt():
+		if args.prompt and sys.stdin.isatty():
+			sys.stderr.write( '\033[37;1msql>\033[0m ' )
+
+	def print_command( command, args = [] ):
+		if sys.stderr.isatty():
+			command = '\033[34m%s\033[0m' % command
+		sys.stderr.write( command )
+		sys.stderr.write( ' ' )
+		if args != []:
+			sys.stderr.write( '(' )
+			sys.stderr.write( ', '.join( (str(x) for x in args) ) )
+			sys.stderr.write( ')' )
+		sys.stderr.write( '\n' )
+
+	# Fix the delimiter
+	args.delimiter = args.delimiter.replace( "\\t", "\t" )
+	args.delimiter = args.delimiter.replace( "\\n", "\n" )
+	args.delimiter = args.delimiter.replace( "\\0", "\0" )
+
+	def die( string ):
+		sys.stderr.write( str( string ) )
+		sys.stderr.write( '\n' )
+		sys.exit( 1 )
+
+	def error( kind, message ):
+		if sys.stderr.isatty():
+			sys.stderr.write( "\033[91;1m%s\033[0m: " % kind )
+		else:
+			sys.stderr.write( "%s: " % kind )
+		sys.stderr.write( message )
+		sys.stderr.write( '\n' )
+
+	all_headers = {}
+
+	# Create the database
+	with closing( sqlite3.connect( ':memory:' ) ) as connection:
+		for index, f in enumerate( args.file ):
+
+			# Extract the headers.
+			if f.find( ':' ) != -1:
+				headers = f[f.find(':')+1:].split( ',' )
+				f = f[:f.find(':')]
+			else:
+				headers = []
+
+			# Read the file
+			with open( f ) as f1:
+				beginning = f1.tell()
+				reader = iter( csv.reader( f1, delimiter = args.delimiter ) )
+
+				# Read headers if necessary
+				if len( headers ) == 1 and headers[0] == '*':
+					try:
+						headers = reader.next()
+					except StopIteration:
+						die( "Headers not found in file %s" % f )
+
+				# Determine the maximum row length
+				n = max( [len( row ) for row in reader] )
+				if len( headers ) < n:
+					headers = headers + ["V" + str( i ) for i in xrange( len( headers ) + 1, n + 1 )]
+
+				# Create the table
+				table = "file" + str( index + 1 )
+
+				all_headers[table] = headers
+
+				fields = ','.join( ('"%s"' % x for x in headers) )
+				fields_qs = ','.join( ('?' for _ in headers) )
+				with closing( connection.cursor() ) as cursor:
+					cursor.execute( 'CREATE TABLE "' + table + '" (' + fields + ')' )
+					if args.show_commands:
+						print_command( 'CREATE TABLE "' + table + '" (' + fields + ')' )
+				
+					f1.seek( beginning )
+					reader = iter( csv.reader( f1, delimiter = args.delimiter ) )
+					reader.next()
+					for row in reader:
+						if len( row ) < len( headers ):
+							row = row + [None for _ in xrange( len( row ), len( headers ) )]
+						cursor.execute( 'INSERT INTO "' + table + '" (' + fields + ') VALUES (' + fields_qs + ')', row )
+						if args.show_commands:
+							print_command( 'INSERT INTO "' + table + '" (' + fields + ') VALUES (' + fields_qs + ')', row )
+
+		def until( nextvalue, pred ):
+			while True:
+				value = nextvalue()
+				if pred( value ): return
+				yield value
+
+		with closing( connection.cursor() ) as cursor:
+			if len( args.command ) == 0:
+				get_command = lambda: previous + sys.stdin.readline()
+			else:
+				iterator = (x + '\n' for x in args.command)
+				args.prompt = False
+				get_command = iterator.next
+
+			previous = ''
+			prompt()
+			for line in until( get_command, lambda x: x == '' ):
+				previous = ''
+				line = line[:-1]
+				if len( line ) > 0 and line[-1] == '\\':
+					previous = line[:-1]
+					if sys.stdin.isatty():
+						sys.stderr.write( '\033[37m...\033[0m  ' )
+					continue
+				elif line == 'exit' or line == 'quit':
+					sys.exit( 1 )
+				elif len( line ) >= len( '.headers' ) and line[:len( '.headers' )] == '.headers':
+					table = line[len( '.headers')+1:]
+					if table not in all_headers:
+						error( 'Error', 'Table "%s" not in headers index.' % table )
+					else:
+						print args.ofs.join( all_headers[table] )
+				else:
+					try:
+						cursor.execute( line )
+						for row in cursor:
+							print args.ofs.join( row )
+					except sqlite3.OperationalError as ex:
+						error( 'SQL Error', ' '.join( ex.args ) )
+				prompt()
+			if sys.stderr.isatty() and len( args.command ) == 0:
+				sys.stderr.write( '\n' )
+
+except KeyboardInterrupt:
+	if sys.stderr.isatty():
+		sys.stderr.write( '\n' )
+	sys.exit( 0 )
+except SystemExit:
+	sys.exit( 0 )

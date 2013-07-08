@@ -6,6 +6,11 @@ import csv
 import sqlite3
 import sys
 
+def rmNone( x ):
+	if x is None:
+		return ''
+	return x
+
 try:
 	parser = ArgumentParser( description = 'Run SQLite commands on TSV files' )
 	parser.add_argument( 'file', metavar = 'file', type = str, nargs = '*', help = 'the files to use' )
@@ -140,7 +145,7 @@ try:
 					try:
 						cursor.execute( line )
 						for row in cursor:
-							print( args.ofs.join( row ) )
+							print( args.ofs.join( (rmNone(x) for x in row) ) )
 					except sqlite3.OperationalError as ex:
 						error( 'SQL Error', ' '.join( ex.args ) )
 				prompt()

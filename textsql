@@ -77,7 +77,7 @@ try:
 				# Read headers if necessary
 				if len( headers ) == 1 and headers[0] == '*':
 					try:
-						headers = next( reader.next )
+						headers = next( reader )
 					except StopIteration:
 						die( "Headers not found in file %s" % f )
 
